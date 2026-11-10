@@ -132,6 +132,14 @@ describe Rack::Static do
     Zlib::GzipReader.wrap(StringIO.new(res.body), &:read).must_match(/ruby/)
   end
 
+  it "sets content-encoding for a HEAD request if client accepts gzip encoding and gzip files are present" do
+    res = @gzip_request.head("/cgi/test", 'HTTP_ACCEPT_ENCODING' => 'deflate, gzip')
+    res.must_be :ok?
+    res.headers['content-encoding'].must_equal 'gzip'
+    res.headers['content-type'].must_equal 'text/plain'
+    res.body.must_be :empty?
+  end
+
   it "serves regular files if client accepts gzip encoding and gzip files are not present" do
     res = @gzip_request.get("/cgi/rackup_stub.rb", 'HTTP_ACCEPT_ENCODING' => 'deflate, gzip')
     res.must_be :ok?
@@ -146,6 +154,51 @@ describe Rack::Static do
     res.headers['content-encoding'].must_be_nil
     res.headers['content-type'].must_equal 'text/plain'
     res.body.must_match(/ruby/)
+  end
+
+  it "serves a byte range of the gzipped file if client accepts gzip encoding" do
+    res = @gzip_request.get("/cgi/test", 'HTTP_ACCEPT_ENCODING' => 'deflate, gzip', 'HTTP_RANGE' => 'bytes=0-9')
+    res.status.must_equal 206
+    res.headers['content-encoding'].must_equal 'gzip'
+    res.headers['content-type'].must_equal 'text/plain'
+    res.headers['content-range'].must_equal "bytes 0-9/#{File.size(File.join(DOCROOT, "/cgi/test.gz"))}"
+  end
+
+  it "serves the whole gzipped file if client accepts gzip encoding and requests multiple ranges" do
+    res = @gzip_request.get("/cgi/test", 'HTTP_ACCEPT_ENCODING' => 'deflate, gzip', 'HTTP_RANGE' => 'bytes=0-1, 4-5')
+    res.must_be :ok?
+    res.headers['content-encoding'].must_equal 'gzip'
+    res.headers['content-type'].must_equal 'text/plain'
+    res.headers['content-range'].must_be_nil
+    Zlib::GzipReader.wrap(StringIO.new(res.body), &:read).must_match(/ruby/)
+  end
+
+  it "serves multiple ranges of regular files if client accepts gzip encoding and gzip files are not present" do
+    res = @gzip_request.get("/cgi/rackup_stub.rb", 'HTTP_ACCEPT_ENCODING' => 'deflate, gzip', 'HTTP_RANGE' => 'bytes=0-1, 4-5')
+    res.status.must_equal 206
+    res.headers['content-encoding'].must_be_nil
+    res.headers['content-type'].must_equal 'multipart/byteranges; boundary=AaB03x'
+  end
+
+  it "does not set content-encoding if the byte range of the gzipped file is unsatisfiable" do
+    res = @gzip_request.get("/cgi/test", 'HTTP_ACCEPT_ENCODING' => 'deflate, gzip', 'HTTP_RANGE' => 'bytes=1234-5678')
+    res.status.must_equal 416
+    res.headers['content-encoding'].must_be_nil
+    res.body.must_equal "Byte range unsatisfiable\n"
+  end
+
+  it "does not set content-encoding if the request method is not allowed" do
+    res = @gzip_request.post("/cgi/test", 'HTTP_ACCEPT_ENCODING' => 'deflate, gzip')
+    res.status.must_equal 405
+    res.headers['content-encoding'].must_be_nil
+    res.body.must_equal "Method Not Allowed\n"
+  end
+
+  it "does not set content-encoding for an OPTIONS request" do
+    res = @gzip_request.options("/cgi/test", 'HTTP_ACCEPT_ENCODING' => 'deflate, gzip')
+    res.must_be :ok?
+    res.headers['allow'].must_equal 'GET, HEAD, OPTIONS'
+    res.headers['content-encoding'].must_be_nil
   end
 
   it "returns 304 if gzipped file isn't modified since last serve" do

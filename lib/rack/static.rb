@@ -132,17 +132,18 @@ module Rack
       if can_serve(actual_path)
         if overwrite_file_path(path)
           env[PATH_INFO] = (add_index_root?(path) ? path + @index : @urls[path])
-        elsif @gzip && env['HTTP_ACCEPT_ENCODING'] && /\bgzip\b/.match?(env['HTTP_ACCEPT_ENCODING'])
+        elsif gzip?(env)
           path = env[PATH_INFO]
           env[PATH_INFO] += '.gz'
+          # Ignore a request for multiple ranges, and serve the whole file
+          range = env.delete('HTTP_RANGE') if env['HTTP_RANGE'].to_s.include?(',')
           response = @file_server.call(env)
           env[PATH_INFO] = path
+          env['HTTP_RANGE'] = range if range
 
           if response[0] == 404
             response = nil
-          elsif response[0] == 304
-            # Do nothing, leave headers as is
-          else
+          elsif response[0] == 200 || response[0] == 206
             response[1][CONTENT_TYPE] = Mime.mime_type(::File.extname(path), 'text/plain')
             response[1]['content-encoding'] = 'gzip'
           end
@@ -188,5 +189,13 @@ module Rack
       end
     end
 
+    private
+
+    # Whether to look for a gzipped version of the requested file.
+    def gzip?(env)
+      @gzip &&
+        (env[REQUEST_METHOD] == GET || env[REQUEST_METHOD] == HEAD) &&
+        /\bgzip\b/.match?(env['HTTP_ACCEPT_ENCODING'].to_s)
+    end
   end
 end
